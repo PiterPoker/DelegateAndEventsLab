@@ -1,123 +1,79 @@
-﻿using FileWalker.Models;
+﻿using System.Collections.Generic;
+using FileWalker.Models;
 
 namespace FileWalker;
-/// <summary>
-/// Provides functionality to recursively search for files within a specified directory and its subdirectories.
-/// Uses events to notify subscribers about file findings and post-processing.
-/// Handles potential exceptions like unauthorized access and excessively long paths.
-/// </summary>
-public class FileSearcher
+public interface IFileSearcher
 {
-    /// <summary>
-    /// Event triggered when a file matching the search criteria is found.
-    /// </summary>
-    public event EventHandler<FileArgs>? FileFoundEvent;
+    event EventHandler<FileArgs> FileFound;
+    event EventHandler<FileSearcherArgs> SearchCompleted;
+    void Search();
+}
 
-    /// <summary>
-    /// Event triggered after processing a file or directory (useful for post-processing tasks).
-    /// </summary>
-    public event EventHandler<FileSearcherArgs>? PostProcessingEvent;
+public class FileSearcher : IFileSearcher
+{
+    public event EventHandler<FileArgs> FileFound;
+    public event EventHandler<FileSearcherArgs> SearchCompleted;
 
-    /// <summary>
-    /// Writes an informational message to the console.
-    /// </summary>
-    /// <param name="message">The message to write.</param>
-    public virtual void OnWriteTextInfoHandler(string message) => ConsoleStyle.WriteInfo($"Info: {message}");
+    private readonly string _directory;
+    private readonly string _searchPattern;
+    private readonly bool _searchAll;
 
-
-    /// <summary>
-    /// Writes a warning message to the console.
-    /// </summary>
-    /// <param name="message">The message to write.</param>
-    public virtual void OnWriteTextWarningHandler(string message) => ConsoleStyle.WriteWarning($"Warning: {message}");
-
-    /// <summary>
-    /// Writes an error message to the console.
-    /// </summary>
-    /// <param name="message">The message to write.</param>
-    public virtual void OnWriteTextErrorHandler(string message) => ConsoleStyle.WriteError($"Error: {message}");
-
-    /// <summary>
-    /// Raises the FileFoundEvent event.
-    /// </summary>
-    /// <param name="e">The FileArgs object containing file information.</param>
-    protected virtual void OnFileFoundEvent(FileArgs e) => FileFoundEvent?.Invoke(this, e);
-
-    /// <summary>
-    /// Raises the PostProcessingEvent event.
-    /// </summary>
-    /// <param name="e">The FileSearcherArgs object containing search information.</param>
-    protected virtual void OnPostProcessingEvent(FileSearcherArgs e) => PostProcessingEvent?.Invoke(this, e);
-
-    /// <summary>
-    /// Initiates a file search within the specified directory.
-    /// </summary>
-    /// <param name="directory">The directory to start the search from.</param>
-    /// <param name="searchPattern">The search pattern for files (e.g., "*.txt").</param>
-    /// <param name="cancel">A flag to cancel the search operation.</param>
-    public virtual void Search(string directory, string searchPattern, bool cancel = false)
+    public FileSearcher(string directory, string searchPattern, bool searchAll)
     {
-        SearchFiles(new FileSearcherArgs(directory, searchPattern, cancel));
+        _directory = directory;
+        _searchPattern = searchPattern;
+        _searchAll = searchAll;
     }
 
-    /// <summary>
-    /// Recursively searches for files matching the specified pattern.
-    /// </summary>
-    /// <param name="e">FileSearcherArgs containing search parameters and state.</param>
-    protected virtual void SearchFiles(FileSearcherArgs e)
+    public void Search()
     {
-        if (!SearchForFile(e))
-            SearchForSubDirectory(e);
+        var args = new FileSearcherArgs(_directory, _searchPattern);
+        SearchDirectory(args);
+
+        // По окончании поиска вызываем событие SearchCompleted
+        OnSearchCompleted(args);
     }
 
-    /// <summary>
-    /// Searches for files in the current directory.
-    /// </summary>
-    /// <param name="e">FileSearcherArgs containing search parameters and state.</param>
-    /// <returns>True if any error occurred or search was cancelled; otherwise, False.</returns>
-    private bool SearchForFile(FileSearcherArgs e)
+    protected virtual void OnFileFound(FileArgs e)
     {
+        FileFound?.Invoke(this, e);
+    }
+
+    protected virtual void OnSearchCompleted(FileSearcherArgs e)
+    {
+        SearchCompleted?.Invoke(this, e);
+    }
+
+    private void SearchDirectory(FileSearcherArgs e)
+    {
+        if (e.Cancel) return;
+
         try
         {
             string[] files = Directory.GetFiles(e.CurrentDirectory, e.Pattern);
-            foreach (string file in files)
+            foreach (var file in files)
             {
                 e.FullPath = file;
-                OnFileFoundEvent(e);
-                OnPostProcessingEvent(e);
-                if (e.Cancel) return true;
+                OnFileFound(new FileArgs(file));
+
+                if (!_searchAll)
+                {
+                    e.Cancel = true;
+                    return;
+                }
+            }
+
+            string[] directories = Directory.GetDirectories(e.CurrentDirectory);
+            foreach (var dir in directories)
+            {
+                e.CurrentDirectory = dir;
+                SearchDirectory(e);
+                if (e.Cancel) return;
             }
         }
         catch (UnauthorizedAccessException ex)
         {
-            OnWriteTextWarningHandler($"File access error in the directory: {ex.Message}");
-            return true;
-        }
-        return false;
-    }
-
-    /// <summary>
-    /// Recursively searches subdirectories for files.
-    /// </summary>
-    /// <param name="e">FileSearcherArgs containing search parameters and state.</param>
-    private void SearchForSubDirectory(FileSearcherArgs e)
-    {
-        foreach (string dir in Directory.GetDirectories(e.CurrentDirectory))
-        {
-            try
-            {
-                e.CurrentDirectory = dir;
-                SearchFiles(e);
-                if (e.Cancel) return;
-            }
-            catch (UnauthorizedAccessException)
-            {
-                OnWriteTextWarningHandler($"Skipping directory with restricted access: {dir}");
-            }
-            catch (PathTooLongException)
-            {
-                OnWriteTextErrorHandler($"Skipping directory due to excessively long path: {dir}");
-            }
+            Console.WriteLine($"Недостаточно прав для доступа к директории {e.CurrentDirectory}: {ex.Message}");
         }
     }
 }
